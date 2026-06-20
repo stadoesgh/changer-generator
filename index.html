@@ -13,7 +13,27 @@
 
   <p>
     19x19 result:<br>
-    <canvas id="pixelCanvas" width="19" height="19" style="width:190px;height:190px;image-rendering:pixelated;border:1px solid #000;"></canvas>
+    <canvas id="pixelCanvas" style="image-rendering:pixelated;border:1px solid #000;"></canvas>
+  </p>
+
+  <p>
+    Sprite size:<br>
+    <label>
+      <input type="radio" name="spriteSize" value="19" checked>
+      19x19 (standard)
+    </label><br>
+    <label>
+      <input type="radio" name="spriteSize" value="29">
+      29x29 (bodys, dynamics etc)
+    </label><br>
+    <label>
+      <input type="radio" name="spriteSize" value="38">
+      38x38 (big things, wearables etc)
+    </label><br>
+    <label>
+      <input type="radio" name="spriteSize" value="57">
+      57x57 (very big things)
+    </label>
   </p>
 
   <p>
@@ -70,7 +90,7 @@
 
 <script>
 (function () {
-  const SIZE = 19;
+  let SIZE = 19;
   let lastResult = null;
   let currentPixels = null;
   let lastImage = null;
@@ -83,6 +103,14 @@
   const smoothToggle = document.getElementById('smoothToggle');
   const colorLimitInput = document.getElementById('colorLimitInput');
   const resizeModeInputs = document.getElementsByName('resizeMode');
+  const spriteSizeInputs = document.getElementsByName('spriteSize');
+
+  function getSpriteSize() {
+    for (const r of spriteSizeInputs) {
+      if (r.checked) return parseInt(r.value, 10);
+    }
+    return 19;
+  }
   const statusEl = document.getElementById('status');
   const outputEl = document.getElementById('output');
   const statLine = document.getElementById('statLine');
@@ -261,6 +289,8 @@
   }
 
   function processImage(img) {
+    SIZE = getSpriteSize();
+
     const off = document.createElement('canvas');
     off.width = SIZE;
     off.height = SIZE;
@@ -326,10 +356,14 @@
 
     drawPixelPreview(pixels);
     generateCode();
-    setStatus('Image processed - 19x19, ' + (SIZE * SIZE) + ' pixels, ' + palette.length + ' colors (max ' + maxColors + ').');
+    setStatus('Image processed - ' + SIZE + 'x' + SIZE + ', ' + (SIZE * SIZE) + ' pixels, ' + palette.length + ' colors (max ' + maxColors + ').');
   }
 
   function drawPixelPreview(pixels) {
+    pixelCanvas.width = SIZE;
+    pixelCanvas.height = SIZE;
+    pixelCanvas.style.width = (SIZE * 10) + 'px';
+    pixelCanvas.style.height = (SIZE * 10) + 'px';
     const ctx = pixelCanvas.getContext('2d');
     ctx.clearRect(0, 0, SIZE, SIZE);
     const imgData = ctx.createImageData(SIZE, SIZE);
@@ -403,6 +437,9 @@ ${nameAssign}    return creation;
   smoothToggle.addEventListener('change', reprocessIfLoaded);
   colorLimitInput.addEventListener('input', reprocessIfLoaded);
   for (const r of resizeModeInputs) {
+    r.addEventListener('change', reprocessIfLoaded);
+  }
+  for (const r of spriteSizeInputs) {
     r.addEventListener('change', reprocessIfLoaded);
   }
   colorLimitInput.addEventListener('change', () => {
