@@ -1,0 +1,344 @@
+<div id="app">
+  <h1>Image to Pictorbit Changer code</h1>
+  <p>Upload an image. It gets squashed to 19x19 and turned into a change() function you can paste into a Pictorbit Changer.</p>
+
+  <p>
+    <input type="file" accept="image/*" id="fileInput">
+  </p>
+
+  <p>
+    Source:<br>
+    <canvas id="srcCanvas" width="90" height="90"></canvas>
+  </p>
+
+  <p>
+    19x19 result:<br>
+    <canvas id="pixelCanvas" width="19" height="19" style="width:190px;height:190px;image-rendering:pixelated;border:1px solid #000;"></canvas>
+  </p>
+
+  <p>
+    <label for="colorLimitInput">Max colors:</label><br>
+    <input type="number" id="colorLimitInput" value="55" min="1" max="55" style="width:60px;">
+    (Pictorbit allows a maximum of 55 colors)
+  </p>
+
+  <p>
+    <label>
+      <input type="checkbox" id="smoothToggle" checked>
+      Smooth resize (uncheck for sharp/blocky resize)
+    </label>
+  </p>
+
+  <p>
+    <label for="nameInput">Creation name (optional):</label><br>
+    <input type="text" id="nameInput" maxlength="37">
+  </p>
+
+  <p>
+    <label>
+      <input type="checkbox" id="alphaToggle" checked>
+      Preserve transparency (alpha)
+    </label>
+  </p>
+
+  <p id="status">No image loaded yet.</p>
+
+  <p>
+    <button id="copyBtn">Copy code</button>
+  </p>
+
+  <pre id="output">// Upload an image above to generate code here.</pre>
+
+  <p id="statLine"></p>
+</div>
+
+<script>
+(function () {
+  const SIZE = 19;
+  let lastResult = null;
+  let currentPixels = null;
+  let lastImage = null; // kept so changing color/smoothing controls can re-process without re-uploading
+
+  const fileInput = document.getElementById('fileInput');
+  const srcCanvas = document.getElementById('srcCanvas');
+  const pixelCanvas = document.getElementById('pixelCanvas');
+  const nameInput = document.getElementById('nameInput');
+  const alphaToggle = document.getElementById('alphaToggle');
+  const smoothToggle = document.getElementById('smoothToggle');
+  const colorLimitInput = document.getElementById('colorLimitInput');
+  const statusEl = document.getElementById('status');
+  const outputEl = document.getElementById('output');
+  const statLine = document.getElementById('statLine');
+  const copyBtn = document.getElementById('copyBtn');
+
+  function getMaxColors() {
+    let v = parseInt(colorLimitInput.value, 10);
+    if (isNaN(v) || v < 1) v = 1;
+    if (v > 55) v = 55; // Pictorbit's palette hard limit
+    return v;
+  }
+
+  // Reduce a list of {red,green,blue,alpha} pixels down to at most maxColors
+  // distinct colors using a simple median-cut style quantizer, then maps
+  // every original pixel to its nearest color in that reduced set.
+  function quantizeColors(flatPixels, maxColors) {
+    const colorMap = new Map();
+    flatPixels.forEach(p => {
+      const key = p.red + ',' + p.green + ',' + p.blue + ',' + p.alpha;
+      if (!colorMap.has(key)) {
+        colorMap.set(key, { red: p.red, green: p.green, blue: p.blue, alpha: p.alpha, count: 0 });
+      }
+      colorMap.get(key).count++;
+    });
+    let uniqueColors = Array.from(colorMap.values());
+
+    if (uniqueColors.length <= maxColors) {
+      return { palette: uniqueColors, lookup: buildLookup(uniqueColors) };
+    }
+
+    let buckets = [uniqueColors];
+
+    function channelRange(bucket, channel) {
+      let min = Infinity, max = -Infinity;
+      bucket.forEach(c => {
+        const v = c[channel];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      });
+      return max - min;
+    }
+
+    function widestChannel(bucket) {
+      const ranges = {
+        red: channelRange(bucket, 'red'),
+        green: channelRange(bucket, 'green'),
+        blue: channelRange(bucket, 'blue')
+      };
+      return Object.keys(ranges).reduce((a, b) => ranges[a] >= ranges[b] ? a : b);
+    }
+
+    while (buckets.length < maxColors) {
+      let splitIndex = -1, splitSize = 1;
+      buckets.forEach((b, i) => {
+        if (b.length > splitSize) { splitSize = b.length; splitIndex = i; }
+      });
+      if (splitIndex === -1) break;
+
+      const bucket = buckets[splitIndex];
+      const channel = widestChannel(bucket);
+      bucket.sort((a, b) => a[channel] - b[channel]);
+      const mid = Math.ceil(bucket.length / 2);
+      const bucketA = bucket.slice(0, mid);
+      const bucketB = bucket.slice(mid);
+      buckets.splice(splitIndex, 1, bucketA, bucketB);
+    }
+
+    const palette = buckets.map(bucket => {
+      let r = 0, g = 0, b = 0, a = 0, total = 0;
+      bucket.forEach(c => {
+        r += c.red * c.count;
+        g += c.green * c.count;
+        b += c.blue * c.count;
+        a += c.alpha * c.count;
+        total += c.count;
+      });
+      return {
+        red: Math.round(r / total),
+        green: Math.round(g / total),
+        blue: Math.round(b / total),
+        alpha: +(a / total).toFixed(3)
+      };
+    });
+
+    return { palette, lookup: buildLookup(uniqueColors, palette) };
+
+    function buildLookup(unique, paletteOverride) {
+      const pal = paletteOverride || unique;
+      const map = new Map();
+      unique.forEach(c => {
+        const key = c.red + ',' + c.green + ',' + c.blue + ',' + c.alpha;
+        let best = pal[0], bestDist = Infinity;
+        pal.forEach(p => {
+          const dist = (c.red - p.red) ** 2 + (c.green - p.green) ** 2 +
+                       (c.blue - p.blue) ** 2 + ((c.alpha - p.alpha) * 255) ** 2;
+          if (dist < bestDist) { bestDist = dist; best = p; }
+        });
+        map.set(key, best);
+      });
+      return map;
+    }
+  }
+
+  fileInput.addEventListener('change', e => {
+    const f = e.target.files[0];
+    if (f) handleFile(f);
+  });
+
+  function handleFile(file) {
+    if (!file.type.startsWith('image/')) {
+      setStatus('That file doesn\'t look like an image.');
+      return;
+    }
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      lastImage = img;
+      drawSource(img);
+      processImage(img);
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => setStatus('Could not load that image file.');
+    img.src = url;
+  }
+
+  function drawSource(img) {
+    const ctx = srcCanvas.getContext('2d');
+    ctx.clearRect(0, 0, srcCanvas.width, srcCanvas.height);
+    const s = Math.min(img.width, img.height);
+    const sx = (img.width - s) / 2, sy = (img.height - s) / 2;
+    ctx.drawImage(img, sx, sy, s, s, 0, 0, srcCanvas.width, srcCanvas.height);
+  }
+
+  function processImage(img) {
+    const off = document.createElement('canvas');
+    off.width = SIZE;
+    off.height = SIZE;
+    const octx = off.getContext('2d');
+    octx.imageSmoothingEnabled = smoothToggle.checked;
+    octx.clearRect(0, 0, SIZE, SIZE);
+    octx.drawImage(img, 0, 0, img.width, img.height, 0, 0, SIZE, SIZE);
+
+    const data = octx.getImageData(0, 0, SIZE, SIZE).data;
+
+    const rawPixels = [];
+    const flat = [];
+    for (let x = 0; x < SIZE; x++) {
+      rawPixels[x] = [];
+      for (let y = 0; y < SIZE; y++) {
+        const i = (y * SIZE + x) * 4;
+        const p = {
+          red: data[i],
+          green: data[i + 1],
+          blue: data[i + 2],
+          alpha: +(data[i + 3] / 255).toFixed(3)
+        };
+        rawPixels[x][y] = p;
+        flat.push(p);
+      }
+    }
+
+    const maxColors = getMaxColors();
+    const { palette, lookup } = quantizeColors(flat, maxColors);
+
+    const pixels = [];
+    for (let x = 0; x < SIZE; x++) {
+      pixels[x] = [];
+      for (let y = 0; y < SIZE; y++) {
+        const p = rawPixels[x][y];
+        const key = p.red + ',' + p.green + ',' + p.blue + ',' + p.alpha;
+        pixels[x][y] = lookup.get(key);
+      }
+    }
+    currentPixels = pixels;
+
+    drawPixelPreview(pixels);
+    generateCode();
+    setStatus('Image processed - 19x19, ' + (SIZE * SIZE) + ' pixels, ' + palette.length + ' colors (max ' + maxColors + ').');
+  }
+
+  function drawPixelPreview(pixels) {
+    const ctx = pixelCanvas.getContext('2d');
+    ctx.clearRect(0, 0, SIZE, SIZE);
+    const imgData = ctx.createImageData(SIZE, SIZE);
+    for (let x = 0; x < SIZE; x++) {
+      for (let y = 0; y < SIZE; y++) {
+        const p = pixels[x][y];
+        const i = (y * SIZE + x) * 4;
+        imgData.data[i] = p.red;
+        imgData.data[i + 1] = p.green;
+        imgData.data[i + 2] = p.blue;
+        imgData.data[i + 3] = Math.round(p.alpha * 255);
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function rgbaLiteral(p, includeAlpha) {
+    return includeAlpha
+      ? `{red:${p.red},green:${p.green},blue:${p.blue},alpha:${p.alpha}}`
+      : `{red:${p.red},green:${p.green},blue:${p.blue},alpha:1}`;
+  }
+
+  function generateCode() {
+    if (!currentPixels) return;
+    const includeAlpha = alphaToggle.checked;
+    const name = (nameInput.value || '').trim().toLowerCase().slice(0, 37);
+
+    const rows = [];
+    for (let x = 0; x < SIZE; x++) {
+      const rowVals = [];
+      for (let y = 0; y < SIZE; y++) {
+        rowVals.push(rgbaLiteral(currentPixels[x][y], includeAlpha));
+      }
+      rows.push('    [' + rowVals.join(',') + ']');
+    }
+    const pixelDataLiteral = '[\n' + rows.join(',\n') + '\n  ]';
+
+    const nameAssign = name
+      ? `    creation.name = ${JSON.stringify(name)}.slice(0, creation.info.nameMaxLength);\n`
+      : '';
+
+    const code = `function change(creation) {
+    convertToFullColor(creation);
+
+    var size = ${SIZE};
+    var pixelData = ${pixelDataLiteral};
+
+    for (var cell = 0; cell < creation.cells.length; cell++) {
+        for (var x = 0; x < size; x++) {
+            for (var y = 0; y < size; y++) {
+                creation.cells[cell][x][y] = pixelData[x][y];
+            }
+        }
+    }
+
+${nameAssign}    return creation;
+}`;
+
+    lastResult = { code };
+    outputEl.textContent = code;
+    const kb = (new Blob([code]).size / 1024).toFixed(1);
+    statLine.textContent = SIZE * SIZE + ' pixels baked in, code size approx ' + kb + ' KB' + (includeAlpha ? '' : ' (alpha forced to 1, opaque)');
+  }
+
+  function reprocessIfLoaded() {
+    if (lastImage) processImage(lastImage);
+  }
+
+  nameInput.addEventListener('input', generateCode);
+  alphaToggle.addEventListener('change', generateCode);
+  smoothToggle.addEventListener('change', reprocessIfLoaded);
+  colorLimitInput.addEventListener('input', reprocessIfLoaded);
+  colorLimitInput.addEventListener('change', () => {
+    colorLimitInput.value = getMaxColors();
+    reprocessIfLoaded();
+  });
+
+  copyBtn.addEventListener('click', () => {
+    if (!lastResult) {
+      setStatus('Nothing to copy yet - upload an image first.');
+      return;
+    }
+    navigator.clipboard.writeText(lastResult.code).then(() => {
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy code'; }, 1400);
+    }).catch(() => {
+      setStatus('Copy failed - select the code manually.');
+    });
+  });
+
+  function setStatus(msg) {
+    statusEl.textContent = msg;
+  }
+})();
+</script>
