@@ -1,6 +1,6 @@
 <div id="app">
-  <h1>Image to Pictorbit Changer code</h1>
-  <p>Upload an image. It gets squashed to 19x19 and turned into a change() function you can paste into a Pictorbit Changer.</p>
+  <h1>image to changer</h1>
+  <p>makes image become changer code to import an image to pictorbit. Yum!</p>
 
   <p>
     <input type="file" accept="image/*" id="fileInput">
@@ -19,35 +19,35 @@
   <p>
     <label for="colorLimitInput">Max colors:</label><br>
     <input type="number" id="colorLimitInput" value="55" min="1" max="55" style="width:60px;">
-    (Pictorbit allows a maximum of 55 colors)
+    (55 colors is the max)
   </p>
 
   <p>
     <label>
       <input type="checkbox" id="smoothToggle" checked>
-      Smooth resize (uncheck for sharp/blocky resize)
+      smooth resize
     </label>
   </p>
 
   <p>
-    <label for="nameInput">Creation name (optional):</label><br>
+    <label for="nameInput">creation name (optional)</label><br>
     <input type="text" id="nameInput" maxlength="37">
   </p>
 
   <p>
     <label>
       <input type="checkbox" id="alphaToggle" checked>
-      Preserve transparency (alpha)
+      use transparency
     </label>
   </p>
 
-  <p id="status">No image loaded yet.</p>
+  <p id="status">no image loaded yet.</p>
 
   <p>
-    <button id="copyBtn">Copy code</button>
+    <button id="copyBtn">copy code</button>
   </p>
 
-  <pre id="output">// Upload an image above to generate code here.</pre>
+  <pre id="output">// uplaod image.</pre>
 
   <p id="statLine"></p>
 </div>
@@ -57,7 +57,7 @@
   const SIZE = 19;
   let lastResult = null;
   let currentPixels = null;
-  let lastImage = null; // kept so changing color/smoothing controls can re-process without re-uploading
+  let lastImage = null;
 
   const fileInput = document.getElementById('fileInput');
   const srcCanvas = document.getElementById('srcCanvas');
@@ -74,13 +74,10 @@
   function getMaxColors() {
     let v = parseInt(colorLimitInput.value, 10);
     if (isNaN(v) || v < 1) v = 1;
-    if (v > 55) v = 55; // Pictorbit's palette hard limit
+    if (v > 55) v = 55;
     return v;
   }
 
-  // Reduce a list of {red,green,blue,alpha} pixels down to at most maxColors
-  // distinct colors using a simple median-cut style quantizer, then maps
-  // every original pixel to its nearest color in that reduced set.
   function quantizeColors(flatPixels, maxColors) {
     const colorMap = new Map();
     flatPixels.forEach(p => {
