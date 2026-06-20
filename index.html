@@ -17,6 +17,22 @@
   </p>
 
   <p>
+    Resize method:<br>
+    <label>
+      <input type="radio" name="resizeMode" value="squash" checked>
+      squash to fit (stretches the image to 19x19, ignores original shape)
+    </label><br>
+    <label>
+      <input type="radio" name="resizeMode" value="crop">
+      crop to fit (cuts off the edges so nothing gets squished)
+    </label><br>
+    <label>
+      <input type="radio" name="resizeMode" value="fit">
+      shrink to fit (keeps the full image, adds transparent padding so it's not squished)
+    </label>
+  </p>
+
+  <p>
     <label for="colorLimitInput">Max colors:</label><br>
     <input type="number" id="colorLimitInput" value="55" min="1" max="55" style="width:60px;">
     (55 colors is the max)
@@ -66,6 +82,7 @@
   const alphaToggle = document.getElementById('alphaToggle');
   const smoothToggle = document.getElementById('smoothToggle');
   const colorLimitInput = document.getElementById('colorLimitInput');
+  const resizeModeInputs = document.getElementsByName('resizeMode');
   const statusEl = document.getElementById('status');
   const outputEl = document.getElementById('output');
   const statLine = document.getElementById('statLine');
@@ -76,6 +93,53 @@
     if (isNaN(v) || v < 1) v = 1;
     if (v > 55) v = 55;
     return v;
+  }
+
+  function getResizeMode() {
+    for (const r of resizeModeInputs) {
+      if (r.checked) return r.value;
+    }
+    return 'squash';
+  }
+
+  // Draws img into destCtx at the given destination rect. When smooth=true,
+  // downsamples in halving steps so large images are genuinely blended/averaged
+  // rather than relying on a single low-quality browser resize pass (which barely
+  // does anything visible when shrinking something huge down to ~19px).
+  // When smooth=false, disables smoothing so the result is a hard, blocky resize.
+  function drawResized(destCtx, img, sx, sy, sw, sh, dx, dy, dw, dh, smooth) {
+    if (!smooth) {
+      destCtx.imageSmoothingEnabled = false;
+      destCtx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+      return;
+    }
+
+    // progressive halving downsample for real smoothing
+    let curCanvas = document.createElement('canvas');
+    curCanvas.width = sw;
+    curCanvas.height = sh;
+    let curCtx = curCanvas.getContext('2d');
+    curCtx.imageSmoothingEnabled = true;
+    curCtx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+
+    let curW = sw, curH = sh;
+    while (curW > dw * 2 || curH > dh * 2) {
+      const nextW = Math.max(dw, Math.round(curW / 2));
+      const nextH = Math.max(dh, Math.round(curH / 2));
+      const nextCanvas = document.createElement('canvas');
+      nextCanvas.width = nextW;
+      nextCanvas.height = nextH;
+      const nextCtx = nextCanvas.getContext('2d');
+      nextCtx.imageSmoothingEnabled = true;
+      nextCtx.drawImage(curCanvas, 0, 0, curW, curH, 0, 0, nextW, nextH);
+      curCanvas = nextCanvas;
+      curCtx = nextCtx;
+      curW = nextW;
+      curH = nextH;
+    }
+
+    destCtx.imageSmoothingEnabled = true;
+    destCtx.drawImage(curCanvas, 0, 0, curW, curH, dx, dy, dw, dh);
   }
 
   function quantizeColors(flatPixels, maxColors) {
@@ -201,9 +265,31 @@
     off.width = SIZE;
     off.height = SIZE;
     const octx = off.getContext('2d');
-    octx.imageSmoothingEnabled = smoothToggle.checked;
     octx.clearRect(0, 0, SIZE, SIZE);
-    octx.drawImage(img, 0, 0, img.width, img.height, 0, 0, SIZE, SIZE);
+
+    const mode = getResizeMode();
+    const smooth = smoothToggle.checked;
+
+    if (mode === 'squash') {
+      // stretch the whole image to fill the 19x19 square, ignoring aspect ratio
+      drawResized(octx, img, 0, 0, img.width, img.height, 0, 0, SIZE, SIZE, smooth);
+
+    } else if (mode === 'crop') {
+      // crop the longer side so what's left is a square, then resize that
+      // square (no distortion since it's already 1:1), filling the canvas
+      const s = Math.min(img.width, img.height);
+      const sx = (img.width - s) / 2;
+      const sy = (img.height - s) / 2;
+      drawResized(octx, img, sx, sy, s, s, 0, 0, SIZE, SIZE, smooth);
+
+    } else { // 'fit' - shrink to fit inside 19x19, keep full image, pad the rest transparent
+      const scale = Math.min(SIZE / img.width, SIZE / img.height);
+      const drawW = Math.max(1, Math.round(img.width * scale));
+      const drawH = Math.max(1, Math.round(img.height * scale));
+      const dx = Math.floor((SIZE - drawW) / 2);
+      const dy = Math.floor((SIZE - drawH) / 2);
+      drawResized(octx, img, 0, 0, img.width, img.height, dx, dy, drawW, drawH, smooth);
+    }
 
     const data = octx.getImageData(0, 0, SIZE, SIZE).data;
 
@@ -316,6 +402,9 @@ ${nameAssign}    return creation;
   alphaToggle.addEventListener('change', generateCode);
   smoothToggle.addEventListener('change', reprocessIfLoaded);
   colorLimitInput.addEventListener('input', reprocessIfLoaded);
+  for (const r of resizeModeInputs) {
+    r.addEventListener('change', reprocessIfLoaded);
+  }
   colorLimitInput.addEventListener('change', () => {
     colorLimitInput.value = getMaxColors();
     reprocessIfLoaded();
